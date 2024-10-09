@@ -92,6 +92,7 @@ class Model(nn.Module):
         )
         self.output = nn.Linear(config.emb_dim, config.output_size, bias=False)
         self.norm = RMSNorm()
+        self.flops = self.get_flops(config.emb_dim, config.ffn_dim, config.nb_layers, config.output_size)
 
     def forward(self, x: torch.Tensor):
         out = self.embeddings(x)
@@ -99,24 +100,23 @@ class Model(nn.Module):
             out = layer(self.norm(out)) + out
         return self.output(self.norm(out))
 
-    def get_forward_pass_flow(self) -> int:
+    @staticmethod
+    def get_flops(emb_dim: int, ffn_dim: int, nb_layers: int, output_size: int):
         """
-        Compute the number of FLOP for a single forward pass.
+        Get the number of flops for the model.
         """
-        total_flop = (
-            0  # The embedding layer is a lookup operation, no FLOP
-            + sum(feed_forward_block.get_forward_pass_flow() for feed_forward_block in self.layers)
-            + 2 * self.config.emb_dim * self.config.output_size  # output layer
-            + self.norm.get_forward_pass_flow(input_size=self.config.emb_dim)  # normalization layer
-        )
-        return total_flop
+        # lookup table
+        flop_embedding = 0
 
-    def get_training_flop(self) -> int:
-        """
-        Compute the number of FLOP for a single training step, as the sum of the number of FLOP for a
-        single forward and backward pass.
-        """
-        return (
-            self.get_forward_pass_flow()  # forward pass
-            + 2 * self.get_forward_pass_flow()  # approximation of backward pass
-        )
+        flop_norm = 3 * emb_dim
+        flop_res = emb_dim
+
+        # 3 matrix multiplications and the silu activation
+        flop_linear = 3 * 2 * emb_dim * ffn_dim + 2 * ffn_dim
+        flop_layer = flop_res + flop_linear + flop_norm
+
+        flop_output = 2 * emb_dim * output_size + flop_norm
+
+        total_flops = flop_embedding + nb_layers * flop_layer + flop_output
+
+        return total_flops
